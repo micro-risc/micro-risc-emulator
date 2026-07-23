@@ -1,8 +1,10 @@
+#include "input.h"
+#include "emulator.h"
 #include <stdint.h>
-#include <stdio.h>
+#include <ncurses.h>
 
 int main(int argc, char** argv) {
-    if (argc != 2) {
-        printf("Format: ./emulator filename");
-    }
+    args = parseArgs(argc, argv);
+
+    runEmulator();
 }
