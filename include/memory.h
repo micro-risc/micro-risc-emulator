@@ -2,6 +2,7 @@
 #include <stdint.h>
 
 #include "emulator.h"
+#include "mmio.h"
 
 static inline int readMem(uint64_t addr, int numBytes, uint64_t *value) {
     if (addr + numBytes > args.memSize) /* Modify later for MMIO */
