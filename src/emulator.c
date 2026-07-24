@@ -1,11 +1,15 @@
 #include "emulator.h"
-#include "memory.h"
-#include "aluOps.h"
+#include "fault/faultCodes.h"
 
+#include "opcodes/alu.h"
+#include "opcodes/branch.h"
+#include "opcodes/jump.h"
+#include "opcodes/li.h"
+#include "opcodes/mem.h"
+#include "helpers/fetch.h"
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
-
-static void* dispatchTable[256];
 
 /* The CPU State */
 CPU cpuState;
@@ -23,7 +27,7 @@ void runEmulator() {
         exit(EXIT_FAILURE);
     }
 
-    cpuState.pc = args.entry;
+    cpuState.registers[15] = args.entry;
 
     /* Load the File into RAM */
     FILE* fptr = fopen(args.path, "r");
@@ -71,45 +75,60 @@ void runEmulator() {
         }
     }
 
-    uint32_t instruction;
-    uint8_t funct4;
-    uint8_t funct8;
-    uint8_t rd;
-    uint8_t rs1;
-    uint8_t rs2;
-
-    bool fault;
-
-    uint64_t reg1;
-    uint64_t reg2;
-    uint64_t imm;
-    uint64_t scratch;
-    bool we;
-    
-    /* The table of all the opcodes */
-    for (int i = 0; i < 256; i++) {
-        dispatchTable[i] = &&illegalEncoding; /* Zero out every entry */
-    }
-
-    dispatchTable[OPC_ALU_R]    = &&opcAluR;
-    dispatchTable[OPC_ALU_I]    = &&opcAluI;
-    dispatchTable[OPC_LOAD]     = &&opcLoad;
-    dispatchTable[OPC_STORE]    = &&opcStore;
-    dispatchTable[OPC_BRANCH]   = &&opcBranch;
-    dispatchTable[OPC_JMP]      = &&opcJmp;
-    dispatchTable[OPC_JI]       = &&opcJi;
-    dispatchTable[OPC_LI]       = &&opcLi;
-
     /* The actual emulator */
+	while (true) {
+		uint32_t instruction;
+		int trap = fetchInstruction(cpuState.registers[15], &instruction);
+		
+		printTrace(tfptr, instruction); /* Also exits if maxCycles has passed */
 
-    stepBegin:
-    if (readMem32(cpuState.pc, &instruction)) {
-        fprintf(stderr, "Address out of range.");
-        goto exitEmulator;
-    }
+		/* Handle Illegal Mem Access */
+		if (trap != FAULT_NONE) {
+			fprintf(stderr, "Illegal Fetch At: 0x%lx", cpuState.registers[15]);
+    		
+			if (args.trace || args.verbose) 
+        		fclose(tfptr);
 
+    		free(cpuState.ram);
+    		exit(EXIT_FAILURE);
+		} 
+
+		/* Dispatch Based on Opcode */
+		switch ((uint8_t)instruction) {
+			case OPC_ALU_R: 	trap = opcodeAluR(instruction); 	break;
+			case OPC_ALU_I: 	trap = opcodeAluI(instruction); 	break;
+			case OPC_LOAD: 		trap = opcodeLoad(instruction); 	break;
+			case OPC_STORE: 	trap = opcodeStore(instruction); 	break;
+			case OPC_BRANCH: 	trap = opcodeBranch(instruction); 	break;
+			case OPC_JMP: 		trap = opcodeJmp(instruction); 		break;
+			case OPC_JI: 		trap = opcodeJi(instruction); 		break;
+			case OPC_LI: 		trap = opcodeLi(instruction); 		break;
+			default: trap = FAULT_ILLEGAL_ENCODING; 				break;
+		}
+
+		if (trap != FAULT_NONE) {
+			fprintf(stderr, "Illegal Encoding: 0x%x, At: 0x%lx", instruction, cpuState.registers[15]);
+    		
+			if (args.trace || args.verbose) 
+        		fclose(tfptr);
+
+    		free(cpuState.ram);
+    		exit(EXIT_FAILURE);
+
+		}
+	}
+
+	/* Exit Emulator (Should never reach here but) */
+    if (args.trace || args.verbose) 
+        fclose(tfptr);
+
+    free(cpuState.ram);
+    exit(EXIT_FAILURE);
+}
+
+void printTrace(FILE* tfptr, uint32_t instruction) {
     if (args.trace || args.verbose) {
-        fprintf(tfptr, "Cycle: %ld,\tPC: 0x%016lx,\tInstruction: 0x%08x\n", cpuState.currentCycle, cpuState.pc, instruction);
+        fprintf(tfptr, "Cycle: %ld,\tPC: 0x%016lx,\tInstruction: 0x%08x\n", cpuState.currentCycle, cpuState.registers[15], instruction);
     }
 
     if (args.verbose) {
@@ -117,7 +136,7 @@ void runEmulator() {
         fprintf(tfptr, "a0: 0x%016lx,\ta1: 0x%016lx\ta2: 0x%016lx,\ta3: 0x%016lx\n", cpuState.registers[0], cpuState.registers[1], cpuState.registers[2], cpuState.registers[3]);
         fprintf(tfptr, "t0: 0x%016lx,\tt1: 0x%016lx\tt2: 0x%016lx,\ts0: 0x%016lx\n", cpuState.registers[4], cpuState.registers[5], cpuState.registers[6], cpuState.registers[7]);
         fprintf(tfptr, "s1: 0x%016lx,\ts2: 0x%016lx\ts3: 0x%016lx,\ts4: 0x%016lx\n", cpuState.registers[8], cpuState.registers[9], cpuState.registers[10], cpuState.registers[11]);
-        fprintf(tfptr, "lr: 0x%016lx,\tfp: 0x%016lx\tsp: 0x%016lx,\tpc: 0x%016lx\n", cpuState.registers[12], cpuState.registers[13], cpuState.registers[14], cpuState.pc);
+        fprintf(tfptr, "lr: 0x%016lx,\tfp: 0x%016lx\tsp: 0x%016lx,\tpc: 0x%016lx\n", cpuState.registers[12], cpuState.registers[13], cpuState.registers[14], cpuState.registers[15]);
 
         /* Dump Flags (Before Execution) */
         fprintf(tfptr, "Flags: ");
@@ -130,237 +149,13 @@ void runEmulator() {
     }
 
     cpuState.currentCycle++;
-    if (cpuState.currentCycle > args.maxCycles) {
+    if (cpuState.currentCycle > args.maxCycles && args.maxCycles != 0) {
         printf("%ld Cycles Finished\n", args.maxCycles);
-        goto exitEmulator;
+        
+		if (args.trace || args.verbose) 
+       		fclose(tfptr);
+
+    	free(cpuState.ram);
+    	exit(EXIT_SUCCESS);
     }
-
-    /* Extract funct4/8 and Reg select fields */
-    funct4  = extractBitfieldU(instruction, 15, 12);
-    funct8  = extractBitfieldU(instruction, 31, 24);
-    rd      = extractBitfieldU(instruction, 11, 8);
-    rs1     = extractBitfieldU(instruction, 19, 16);
-    rs2     = extractBitfieldU(instruction, 23, 20);
-
-    reg1 = (rs1 == 0xF) ? cpuState.pc : cpuState.registers[rs1];
-    reg2 = (rs2 == 0xF) ? cpuState.pc : cpuState.registers[rs2];
-    we = (rd != 0xF);
-
-    /* Dispatch Instruction */
-    goto *dispatchTable[(uint8_t) instruction];
-
-    /* OPC-ALU-R, 0x00 */
-    opcAluR:
-    switch ( funct4 ) {
-        case 0x0:
-            cpuState.registers[rd] = (we) ? doArithAdd(reg1, reg2) : cpuState.registers[rd];
-            break;
-        case 0x1:
-            cpuState.registers[rd] = (we) ? doArithSub(reg1, reg2) : cpuState.registers[rd];
-            break;
-        case 0x2:
-            cpuState.registers[rd] = (we) ? doArithAddc(reg1, reg2) : cpuState.registers[rd];
-            break;
-        case 0x3:
-            cpuState.registers[rd] = (we) ? doArithSubb(reg1, reg2) : cpuState.registers[rd];
-            break;
-        case 0x4:
-            cpuState.registers[rd] = (we) ? doArithAnd(reg1, reg2) : cpuState.registers[rd];
-            break;
-        case 0x5:
-            cpuState.registers[rd] = (we) ? doArithOr(reg1, reg2) : cpuState.registers[rd];
-            break;
-        case 0x6:
-            cpuState.registers[rd] = (we) ? doArithXor(reg1, reg2) : cpuState.registers[rd];
-            break;
-        case 0x7:
-            cpuState.registers[rd] = (we) ? doArithSll(reg1, reg2) : cpuState.registers[rd];
-            break;
-        case 0x8:
-            cpuState.registers[rd] = (we) ? doArithSrl(reg1, reg2) : cpuState.registers[rd];
-            break;
-        case 0x9:
-            cpuState.registers[rd] = (we) ? doArithSra(reg1, reg2) : cpuState.registers[rd];
-            break;
-        case 0xA:
-            cpuState.registers[rd] = (we) ? doArithRor(reg1, reg2) : cpuState.registers[rd];
-            break;
-        case 0xB:
-            cpuState.registers[rd] = (we) ? doArithRol(reg1, reg2) : cpuState.registers[rd];
-            break;
-        case 0xC:
-            doArithCmp(reg1, reg2);
-            break;
-        default:
-            goto illegalEncoding;
-            break;
-    }
-    cpuState.pc += 4;
-    goto stepBegin;
-
-    /* OPC-ALU-I 0x1 */
-    opcAluI:
-    reg2 = extractBitfieldS((uint64_t) instruction, 31, 20);
-    goto opcAluR; /* So we dont rewrite the switch statement again */
-
-    /* OPC-LOAD, 0x2 */
-    opcLoad:
-    imm = extractBitfieldS((uint64_t) instruction, 31, 20);
-    switch ( funct4 ) {
-        case 0x0: /* lb */
-            fault = readMem(imm + reg1, 1, &scratch);
-            if (fault) goto illegalEncoding;
-            if (rd != 0xFF) cpuState.registers[rd] = extractBitfieldS(scratch, 7, 0);
-            break;
-        case 0x1: /* lh */
-            fault = readMem(imm + reg1, 1, &scratch);
-            if (fault) goto illegalEncoding;
-            if (rd != 0xFF) cpuState.registers[rd] = extractBitfieldS(scratch, 15, 0);
-            break;
-        case 0x2: /* lw */
-            fault = readMem(imm + reg1, 1, &scratch);
-            if (fault) goto illegalEncoding;
-            if (rd != 0xFF) cpuState.registers[rd] = extractBitfieldS(scratch, 31, 0);
-            break;
-        case 0x3: /* ld */
-            fault = readMem(imm + reg1, 1, &scratch);
-            if (fault) goto illegalEncoding;
-            if (rd != 0xFF) cpuState.registers[rd] = scratch;
-            break;
-        case 0x4: /* lbu */
-            fault = readMem(imm + reg1, 1, &scratch);
-            if (fault) goto illegalEncoding;
-            if (rd != 0xFF) cpuState.registers[rd] = scratch;
-            break;
-        case 0x5: /* lhu */
-            fault = readMem(imm + reg1, 1, &scratch);
-            if (fault) goto illegalEncoding;
-            if (rd != 0xFF) cpuState.registers[rd] = scratch;
-            break;
-        case 0x6: /* lwu */
-            fault = readMem(imm + reg1, 1, &scratch);
-            if (fault) goto illegalEncoding;
-            if (rd != 0xFF) cpuState.registers[rd] = scratch;
-            break;
-        default:
-            goto illegalEncoding;
-            break;
-    }
-    cpuState.pc += 4;
-    goto stepBegin;
-
-    /* OPC-STORE, 0x3 */
-    opcStore:
-    imm = ( extractBitfieldS((uint64_t) instruction, 31, 24) << 4 ) | extractBitfieldU((uint64_t) instruction, 11, 8);
-    switch ( funct4 ) {
-        case 0x0: /* sb */
-            fault = writeMem(imm + reg1, 1, reg2);
-            if (fault) goto illegalEncoding;
-            break;
-        case 0x1: /* sh */
-            fault = writeMem(imm + reg1, 2, reg2);
-            if (fault) goto illegalEncoding;
-            break;
-        case 0x2: /* sw */
-            fault = writeMem(imm + reg1, 4, reg2);
-            if (fault) goto illegalEncoding;
-            break;
-        case 0x3: /* sd */
-            fault = writeMem(imm + reg1, 8, reg2);
-            if (fault) goto illegalEncoding;
-            break;
-            goto illegalEncoding;
-            break;
-    }
-    cpuState.pc += 4;
-    goto stepBegin;
-
-    /* OPC-BRANCH, 0x4 */
-    opcBranch:
-    imm = extractBitfieldS((uint64_t) instruction, 31, 16);
-    scratch = extractBitfieldU((uint64_t) instruction, 11, 8);
-    imm = (imm << 6) | (scratch << 2);
-    switch ( funct4 ) {
-        case 0x0: // bzs
-            cpuState.pc += (cpuState.flags.z) ? imm : 4;
-            break;
-        case 0x1: // bzc
-            cpuState.pc += (!cpuState.flags.z) ? imm : 4;
-            break;
-        case 0x2: // bns
-            cpuState.pc += (cpuState.flags.n) ? imm : 4;
-            break;
-        case 0x3: // bnc
-            cpuState.pc += (!cpuState.flags.n) ? imm : 4;
-            break;
-        case 0x4: // bvs
-            cpuState.pc += (cpuState.flags.v) ? imm : 4;
-            break;
-        case 0x5: // bvc
-            cpuState.pc += (!cpuState.flags.v) ? imm : 4;
-            break;
-        case 0x6: // bcs
-            cpuState.pc += (cpuState.flags.c) ? imm : 4;
-            break;
-        case 0x7: // bcc
-            cpuState.pc += (!cpuState.flags.c) ? imm : 4;
-            break;
-        case 0x8: // bgt (signed >)
-            cpuState.pc += (!cpuState.flags.z && cpuState.flags.n == cpuState.flags.v) ? imm : 4;
-            break;
-        case 0x9: // bge (signed >=)
-            cpuState.pc += (cpuState.flags.n == cpuState.flags.v) ? imm : 4;
-            break;
-        case 0xA: // blt (signed <)
-            cpuState.pc += (cpuState.flags.n != cpuState.flags.v) ? imm : 4;
-            break;
-        case 0xB: // ble (signed <=)
-            cpuState.pc += (cpuState.flags.z || cpuState.flags.n != cpuState.flags.v) ? imm : 4;
-            break;
-        case 0xC: // bhi (unsigned >)
-            cpuState.pc += (cpuState.flags.c && !cpuState.flags.z) ? imm : 4;
-            break;
-        case 0xD: // bhs (unsigned >=)
-            cpuState.pc += (cpuState.flags.c) ? imm : 4;
-            break;
-        case 0xE: // blo (unsigned <)
-            cpuState.pc += (!cpuState.flags.c) ? imm : 4;
-            break;
-        case 0xF: // bls (unsigned <=)
-            cpuState.pc += (!cpuState.flags.c || cpuState.flags.z) ? imm : 4;
-            break;
-        default: /* Impossible to reach */
-            fprintf(stderr, "Emulator Has Reached an Invalid State");
-            goto exitEmulator;
-            break;
-    }
-    goto stepBegin;
-
-    /* OPC-JMP, 0x05 */
-    opcJmp:
-    cpuState.pc = cpuState.pc + ( extractBitfieldS((uint64_t) instruction, 31, 8) << 2 ); 
-    goto stepBegin;
-
-    /* OPC-JI, 0x06 */
-    opcJi:
-    cpuState.pc = reg1 + extractBitfieldS((uint64_t) instruction, 31, 20);
-    goto stepBegin;
-
-    /* OPC-LI, 0x7 */
-    opcLi:
-    cpuState.registers[rd] = (we) ? extractBitfieldS((uint64_t) instruction, 31, 12) : cpuState.registers[rd];
-    cpuState.pc += 4;
-    goto stepBegin;
-
-    /* Invalid Opcode / Funct Field */
-    illegalEncoding:
-    fprintf(stderr, "Invalid Opcode/Funct or Fault Occurred, Instruction: 0x%x, Address: 0x%lx\n", instruction, cpuState.pc);
-    goto exitEmulator;
-
-    exitEmulator:
-    if (args.trace || args.verbose) 
-        fclose(tfptr);
-
-    free(cpuState.ram);
-    exit(EXIT_FAILURE);
 }

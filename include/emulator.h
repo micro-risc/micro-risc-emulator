@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
-
+#include <stdio.h>
 
 typedef struct {
     bool z;
@@ -13,8 +13,7 @@ typedef struct {
 } CPUFlags;
 
 typedef struct {
-    uint64_t registers[15];
-    uint64_t pc; // r15
+    uint64_t registers[16]; /* r15 = pc */
     uint64_t currentCycle;
     CPUFlags flags;
     uint8_t *ram;
@@ -75,6 +74,8 @@ static inline int64_t extractBitfieldS(uint64_t value, int end, int start) {
     }
     return (int64_t)unsigned_field;
 }
+
+void printTrace(FILE* tfptr, uint32_t instruction);
 
 extern CPU cpuState;
 extern EmuArgs args;

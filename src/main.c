@@ -1,10 +1,28 @@
 #include "input.h"
 #include "emulator.h"
+#include "terminal.h"
+
 #include <stdint.h>
-#include <ncurses.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <termios.h>
+#include <unistd.h>
+
 
 int main(int argc, char** argv) {
-    args = parseArgs(argc, argv);
+	/* Setup Termios */
+	tcgetattr(STDIN_FILENO, &oldSettings);
 
+	newSettings = oldSettings;
+	/* Changed Settings */
+
+	/* Bind Termios cleanup to exit */
+	atexit(cleanupTermios);
+
+	/* Parse Arguments */
+	args = parseArgs(argc, argv);
+	
     runEmulator();
+
+	exit(0);
 }

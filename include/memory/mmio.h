@@ -1,13 +1,14 @@
 #pragma once
 
+#include "fault/faultCodes.h"
 #include <stdint.h>
 #include <stdbool.h>
 
 typedef struct {
 	uint64_t base;
 	uint64_t length;
-	bool (*readMmio)(uint64_t addr, int bytes, uint64_t* val);
-	bool (*writeMmio)(uint64_t addr, int bytes, uint64_t val);
+	FaultCode (*readMmio)(uint64_t addr, int bytes, uint64_t* val);
+	FaultCode (*writeMmio)(uint64_t addr, int bytes, uint64_t val);
 } MmioEntry;
 
 
