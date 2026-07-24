@@ -11,6 +11,7 @@ typedef struct {
 	FaultCode (*writeMmio)(uint64_t addr, int bytes, uint64_t val);
 } MmioEntry;
 
+void displayTerminal();
 
 #define MMIO_ENTRIES 1
 extern MmioEntry mmioEntries[1];

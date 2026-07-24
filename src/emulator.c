@@ -7,6 +7,7 @@
 #include "opcodes/li.h"
 #include "opcodes/mem.h"
 #include "helpers/fetch.h"
+#include "memory/mmio.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -116,6 +117,9 @@ void runEmulator() {
     		exit(EXIT_FAILURE);
 
 		}
+
+		/* Update Stuff like Terminal Screen */
+		displayTerminal();
 	}
 
 	/* Exit Emulator (Should never reach here but) */

@@ -15,6 +15,10 @@ int main(int argc, char** argv) {
 
 	newSettings = oldSettings;
 	/* Changed Settings */
+	newSettings.c_lflag &= ~(ECHO);
+	tcsetattr(STDIN_FILENO, TCSANOW, &newSettings);
+	printf("\033[?25l");
+	fflush(stdout);	
 
 	/* Bind Termios cleanup to exit */
 	atexit(cleanupTermios);
